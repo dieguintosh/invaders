@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>SPACE INVADERS</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Press Start 2P', monospace;
+      color: #0f0;
+    }
+
+    #hud {
+      display: flex;
+      justify-content: space-between;
+      width: 600px;
+      padding: 10px 0;
+      font-size: 0.65rem;
+      color: #0f0;
+    }
+
+    canvas {
+      border: 2px solid #0f0;
+      box-shadow: 0 0 20px #0f04, 0 0 60px #0f02;
+      display: block;
+    }
+
+    #mensaje {
+      margin-top: 20px;
+      font-size: 0.6rem;
+      color: #0f08;
+      text-align: center;
+      line-height: 2;
+    }
+
+    #overlay {
+      position: absolute;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      pointer-events: none;
+    }
+
+    #overlay h1 {
+      font-size: 1.4rem;
+      color: #0f0;
+      text-shadow: 0 0 20px #0f0;
+      text-align: center;
+    }
+
+    #overlay p {
+      font-size: 0.55rem;
+      color: #0f0;
+      text-align: center;
+      line-height: 2.2;
+    }
+  </style>
+</head>
+<body>
+
+<div id="hud">
+  <span>PUNTOS: <span id="score">0</span></span>
+  <span>VIDAS: <span id="lives">3</span></span>
+  <span>NIVEL: <span id="level">1</span></span>
+</div>
+<canvas id="canvas" width="600" height="500"></canvas>
+<div id="mensaje">← → MOVER &nbsp;|&nbsp; ESPACIO DISPARAR &nbsp;|&nbsp; ENTER INICIAR</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+const W = canvas.width;
+const H = canvas.height;
+
+let estado = 'inicio'; // inicio | jugando | gameover | victoria
+let score = 0;
+let lives = 3;
+let level = 1;
+
+// Jugador
+const PLAYER_W = 36;
+const PLAYER_H = 20;
+let player = { x: W/2 - PLAYER_W/2, y: H - 50, w: PLAYER_W, h: PLAYER_H, speed: 5 };
+
+// Balas jugador
+let bullets = [];
+const BULLET_SPEED = 9;
+let canShoot = true;
+let shootCooldown = 0;
+
+// Balas enemigos
+let enemyBullets = [];
+const ENEMY_BULLET_SPEED = 4;
+
+// Enemigos
+let enemies = [];
+let enemyDir = 1;
+let enemySpeed = 0.6;
+let enemyMoveTimer = 0;
+let enemyMoveInterval = 40; // frames entre movimientos
+let enemyDropped = false;
+let enemyShootTimer = 0;
+
+// Explosiones
+let explosions = [];
+
+// Teclas
+const keys = {};
+document.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Space') e.preventDefault();
+  if (e.code === 'Enter') {
+    if (estado === 'inicio' || estado === 'gameover' || estado === 'victoria') iniciar();
+  }
+});
+document.addEventListener('keyup', e => { keys[e.code] = false; });
+
+function iniciar() {
+  score = 0;
+  lives = 3;
+  level = 1;
+  crearEnemigos();
+  bullets = [];
+  enemyBullets = [];
+  explosions = [];
+  player.x = W/2 - PLAYER_W/2;
+  enemyDir = 1;
+  enemySpeed = 0.6;
+  enemyMoveInterval = 40;
+  estado = 'jugando';
+  actualizarHUD();
+}
+
+function crearEnemigos() {
+  enemies = [];
+  const cols = 10;
+  const rows = 4;
+  const padX = 40;
+  const spacingX = (W - padX*2) / cols;
+  const spacingY = 42;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      enemies.push({
+        x: padX + c * spacingX,
+        y: 60 + r * spacingY,
+        w: 28, h: 20,
+        tipo: r === 0 ? 'A' : r <= 2 ? 'B' : 'C',
+        vivo: true
+      });
+    }
+  }
+  enemyDir = 1;
+  enemySpeed = 0.6 + (level - 1) * 0.3;
+  enemyMoveInterval = Math.max(10, 40 - (level - 1) * 8);
+}
+
+function dibujarJugador() {
+  ctx.fillStyle = '#0f0';
+  // Cuerpo
+  ctx.fillRect(player.x + 8, player.y + 8, player.w - 16, player.h - 8);
+  // Cabina
+  ctx.fillRect(player.x + 14, player.y + 2, player.w - 28, 8);
+  // Alas
+  ctx.fillRect(player.x, player.y + 12, 10, 8);
+  ctx.fillRect(player.x + player.w - 10, player.y + 12, 10, 8);
+  // Cañón
+  ctx.fillRect(player.x + player.w/2 - 2, player.y, 4, 10);
+}
+
+function dibujarEnemigo(e) {
+  if (!e.vivo) return;
+  ctx.fillStyle = e.tipo === 'A' ? '#f00' : e.tipo === 'B' ? '#ff0' : '#0ff';
+
+  if (e.tipo === 'A') {
+    // Forma A: bicho superior
+    ctx.fillRect(e.x + 8, e.y, e.w - 16, 6);
+    ctx.fillRect(e.x + 4, e.y + 6, e.w - 8, 8);
+    ctx.fillRect(e.x, e.y + 10, e.w, 6);
+    ctx.fillRect(e.x + 4, e.y + 16, 4, 4);
+    ctx.fillRect(e.x + e.w - 8, e.y + 16, 4, 4);
+  } else if (e.tipo === 'B') {
+    // Forma B: bicho medio
+    ctx.fillRect(e.x + 4, e.y, e.w - 8, 6);
+    ctx.fillRect(e.x, e.y + 6, e.w, 8);
+    ctx.fillRect(e.x + 4, e.y + 14, e.w - 8, 4);
+    ctx.fillRect(e.x, e.y + 14, 6, 6);
+    ctx.fillRect(e.x + e.w - 6, e.y + 14, 6, 6);
+  } else {
+    // Forma C: bicho inferior
+    ctx.fillRect(e.x + 6, e.y, e.w - 12, 8);
+    ctx.fillRect(e.x, e.y + 8, e.w, 8);
+    ctx.fillRect(e.x + 2, e.y + 16, 8, 4);
+    ctx.fillRect(e.x + e.w - 10, e.y + 16, 8, 4);
+  }
+}
+
+function dibujarBala(b, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(b.x - 2, b.y - 6, 4, 12);
+}
+
+function dibujarExplosion(ex) {
+  ctx.globalAlpha = ex.vida / 20;
+  ctx.fillStyle = '#ff8800';
+  const r = (20 - ex.vida) * 1.5;
+  ctx.beginPath();
+  ctx.arc(ex.x, ex.y, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+function dibujarEstrellas() {
+  if (!dibujarEstrellas.stars) {
+    dibujarEstrellas.stars = Array.from({length: 60}, () => ({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      r: Math.random() * 1.5 + 0.3,
+      b: Math.random()
+    }));
+  }
+  dibujarEstrellas.stars.forEach(s => {
+    ctx.fillStyle = `rgba(255,255,255,${0.3 + s.b * 0.5})`;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+    ctx.fill();
+  });
+}
+
+function actualizarHUD() {
+  document.getElementById('score').textContent = score;
+  document.getElementById('lives').textContent = lives;
+  document.getElementById('level').textContent = level;
+}
+
+function pantallaInicio() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  dibujarEstrellas();
+  ctx.fillStyle = '#0f0';
+  ctx.font = '1rem Press Start 2P, monospace';
+  ctx.textAlign = 'center';
+  ctx.shadowColor = '#0f0';
+  ctx.shadowBlur = 15;
+  ctx.fillText('SPACE INVADERS', W/2, H/2 - 60);
+  ctx.shadowBlur = 0;
+  ctx.font = '0.5rem Press Start 2P, monospace';
+  ctx.fillStyle = '#0f08';
+  ctx.fillText('← →  MOVER', W/2, H/2);
+  ctx.fillText('ESPACIO  DISPARAR', W/2, H/2 + 30);
+  ctx.fillStyle = '#0f0';
+  ctx.fillText('PULSA  ENTER  PARA  EMPEZAR', W/2, H/2 + 80);
+  ctx.textAlign = 'left';
+}
+
+function pantallaGameOver() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  dibujarEstrellas();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#f00';
+  ctx.font = '1rem Press Start 2P, monospace';
+  ctx.shadowColor = '#f00';
+  ctx.shadowBlur = 20;
+  ctx.fillText('GAME  OVER', W/2, H/2 - 40);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#0f0';
+  ctx.font = '0.5rem Press Start 2P, monospace';
+  ctx.fillText('PUNTUACION: ' + score, W/2, H/2 + 10);
+  ctx.fillText('ENTER PARA REINICIAR', W/2, H/2 + 60);
+  ctx.textAlign = 'left';
+}
+
+function pantallaVictoria() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  dibujarEstrellas();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ff0';
+  ctx.font = '0.9rem Press Start 2P, monospace';
+  ctx.shadowColor = '#ff0';
+  ctx.shadowBlur = 20;
+  ctx.fillText('NIVEL ' + level + ' SUPERADO!', W/2, H/2 - 40);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#0f0';
+  ctx.font = '0.5rem Press Start 2P, monospace';
+  ctx.fillText('PUNTUACION: ' + score, W/2, H/2 + 10);
+  ctx.fillText('ENTER PARA SIGUIENTE NIVEL', W/2, H/2 + 60);
+  ctx.textAlign = 'left';
+}
+
+let frame = 0;
+
+function loop() {
+  requestAnimationFrame(loop);
+  frame++;
+
+  if (estado === 'inicio') { pantallaInicio(); return; }
+  if (estado === 'gameover') { pantallaGameOver(); return; }
+  if (estado === 'victoria') { pantallaVictoria(); return; }
+
+  // --- FONDO ---
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  dibujarEstrellas();
+
+  // --- MOVER JUGADOR ---
+  if (keys['ArrowLeft'] && player.x > 0) player.x -= player.speed;
+  if (keys['ArrowRight'] && player.x + player.w < W) player.x += player.speed;
+
+  // --- DISPARAR ---
+  shootCooldown--;
+  if (keys['Space'] && shootCooldown <= 0) {
+    bullets.push({ x: player.x + player.w/2, y: player.y });
+    shootCooldown = 18;
+  }
+
+  // --- MOVER BALAS JUGADOR ---
+  bullets = bullets.filter(b => b.y > -10);
+  bullets.forEach(b => b.y -= BULLET_SPEED);
+
+  // --- MOVER ENEMIGOS ---
+  enemyMoveTimer++;
+  if (enemyMoveTimer >= enemyMoveInterval) {
+    enemyMoveTimer = 0;
+    const vivos = enemies.filter(e => e.vivo);
+    const minX = Math.min(...vivos.map(e => e.x));
+    const maxX = Math.max(...vivos.map(e => e.x + e.w));
+
+    if ((enemyDir === 1 && maxX >= W - 10) || (enemyDir === -1 && minX <= 10)) {
+      enemies.forEach(e => { if (e.vivo) e.y += 18; });
+      enemyDir *= -1;
+    } else {
+      enemies.forEach(e => { if (e.vivo) e.x += enemyDir * (enemySpeed * enemyMoveInterval); });
+    }
+  }
+
+  // --- DISPAROS ENEMIGOS ---
+  enemyShootTimer++;
+  const shootInterval = Math.max(30, 80 - level * 10);
+  if (enemyShootTimer >= shootInterval) {
+    enemyShootTimer = 0;
+    const vivos = enemies.filter(e => e.vivo);
+    if (vivos.length > 0) {
+      const shooter = vivos[Math.floor(Math.random() * vivos.length)];
+      enemyBullets.push({ x: shooter.x + shooter.w/2, y: shooter.y + shooter.h });
+    }
+  }
+
+  // --- MOVER BALAS ENEMIGAS ---
+  enemyBullets = enemyBullets.filter(b => b.y < H + 10);
+  enemyBullets.forEach(b => b.y += ENEMY_BULLET_SPEED);
+
+  // --- COLISIONES: balas jugador vs enemigos ---
+  bullets.forEach(b => {
+    enemies.forEach(e => {
+      if (!e.vivo) return;
+      if (b.x > e.x && b.x < e.x + e.w && b.y > e.y && b.y < e.y + e.h) {
+        e.vivo = false;
+        b.y = -100;
+        explosions.push({ x: e.x + e.w/2, y: e.y + e.h/2, vida: 20 });
+        score += e.tipo === 'A' ? 30 : e.tipo === 'B' ? 20 : 10;
+        actualizarHUD();
+      }
+    });
+  });
+
+  // --- COLISIONES: balas enemigas vs jugador ---
+  enemyBullets.forEach(b => {
+    if (b.x > player.x && b.x < player.x + player.w &&
+        b.y > player.y && b.y < player.y + player.h) {
+      b.y = H + 100;
+      lives--;
+      explosions.push({ x: player.x + player.w/2, y: player.y + player.h/2, vida: 20 });
+      actualizarHUD();
+      if (lives <= 0) { estado = 'gameover'; return; }
+      player.x = W/2 - PLAYER_W/2;
+    }
+  });
+
+  // --- ENEMIGOS LLEGAN ABAJO ---
+  enemies.forEach(e => {
+    if (e.vivo && e.y + e.h >= player.y) {
+      estado = 'gameover';
+    }
+  });
+
+  // --- VICTORIA ---
+  if (enemies.every(e => !e.vivo)) {
+    level++;
+    actualizarHUD();
+    estado = 'victoria';
+  }
+
+  // --- EXPLOSIONES ---
+  explosions = explosions.filter(ex => ex.vida > 0);
+  explosions.forEach(ex => { dibujarExplosion(ex); ex.vida--; });
+
+  // --- DIBUJAR TODO ---
+  enemies.forEach(dibujarEnemigo);
+  bullets.forEach(b => dibujarBala(b, '#0f0'));
+  enemyBullets.forEach(b => dibujarBala(b, '#f44'));
+  dibujarJugador();
+
+  // Línea suelo
+  ctx.fillStyle = '#0f04';
+  ctx.fillRect(0, H - 20, W, 2);
+}
+
+// Siguiente nivel al presionar ENTER en victoria
+document.addEventListener('keydown', e => {
+  if (e.code === 'Enter' && estado === 'victoria') {
+    crearEnemigos();
+    bullets = [];
+    enemyBullets = [];
+    explosions = [];
+    player.x = W/2 - PLAYER_W/2;
+    estado = 'jugando';
+  }
+});
+
+loop();
+</script>
+</body>
+</html>
